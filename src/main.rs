@@ -5,53 +5,25 @@ use aws_sdk_s3::types::ByteStream;
 use lambda_runtime::{run, service_fn, Error, LambdaEvent};
 use serde::{Serialize,Deserialize};
 
+mod twitch;
+
 #[derive(Serialize, Deserialize)]
 struct TwitchEventSubStreamOnline {
     twitch_user_login: String,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct TwitchStream {
-    id: String,
-    user_id: String,
-    user_login: String,
-    user_name: String,
-    game_id: String,
-    game_name: String,
-
-    #[serde(rename = "type")]
-    tw_type: String,
-
-    title: String,
-    tags: Vec<String>,
-    viewer_count: u16,
-    started_at: String,
-    language: String,
-    thumbnail_url: String,
-    tag_ids: Vec<String>,
-    is_mature: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct TwitchPagination {
-    cursor: String,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct TwitchStreams {
-    data: Vec<TwitchStream>,
-    // pagination: TwitchPagination,
-}
-
 struct FuncEnv {
     bucket_name: String,
 
-    twitch_oauth2_token: String,
     twitch_client_id: String,
+    twitch_client_secret: String,
 }
 
-fn get_twitch_client() -> reqwest::Client {
-    reqwest::Client::new()
+async fn get_twitch_client(env: &FuncEnv) -> twitch::TwitchClient {
+    twitch::TwitchClient::new(twitch::TwitchConfig {
+        client_id: env.twitch_client_id.clone(),
+        client_secret: env.twitch_client_secret.clone(),
+    })
 }
 
 async fn get_s3_client() -> Client {
@@ -61,48 +33,25 @@ async fn get_s3_client() -> Client {
     return client;
 } 
 
-fn get_env() -> FuncEnv {
-    let tot = match std::env::var("TWITCH_OAUTH2_TOKEN") {
-        Ok(val) => val,
-        Err(_e) => String::from("none"),
-    };
+fn get_env() -> Result<FuncEnv, std::env::VarError> {
+    let bucket_name = std::env::var("BUCKET_NAME")?;
+    let twitch_client_secret = std::env::var("TWITCH_CLIENT_SECRET")?;
+    let twitch_client_id = std::env::var("TWITCH_CLIENT_ID")?;
 
-    let tci = match std::env::var("TWITCH_CLIENT_ID") {
-        Ok(val) => val,
-        Err(_e) => String::from("none"),
-    };
-
-    let bn = match std::env::var("BUCKET_NAME") {
-        Ok(val) => val,
-        Err(_e) => String::from(""),
-    };
-
-    FuncEnv {
-        bucket_name: bn,
-
-        twitch_oauth2_token: tot,
-        twitch_client_id: tci,
-    }
+    Ok(FuncEnv {
+        bucket_name,
+        twitch_client_secret,
+        twitch_client_id,
+    })
 }
 
 async fn function_handler(event: LambdaEvent<CloudWatchEvent<TwitchEventSubStreamOnline>>) -> Result<(), Error> {
     let client = get_s3_client().await;
-    let tw_client = get_twitch_client();
+    let env = get_env()?;
+    let tw_client = get_twitch_client(&env).await;
     let detail = event.payload.detail.as_ref().unwrap();
-    let env = get_env();
 
-    let streams = tw_client
-        .get("https://api.twitch.tv/helix/streams")
-        .query(&[
-            ("user_login", detail.twitch_user_login.clone()),
-            ("type", "live".to_string()),
-        ])
-        .header("Authorization", format!("Bearer {}", env.twitch_oauth2_token))
-        .header("Client-Id", env.twitch_client_id)
-        .send()
-        .await?
-        .json::<TwitchStreams>()
-        .await?;
+    let streams = tw_client.get_streams(&detail.twitch_user_login).await?;
 
     if streams.data.len() == 0 {
         return Err("Stream list did not include a live stream.".into());
@@ -110,11 +59,11 @@ async fn function_handler(event: LambdaEvent<CloudWatchEvent<TwitchEventSubStrea
 
     let thumbnail_url = &streams.data.get(0).unwrap().thumbnail_url;
     let thumbnail_set = thumbnail_url.replace("{width}", "1280").replace("{height}", "720");
-    let thumbnail = tw_client.get(thumbnail_set).send().await?.bytes().await?;
+    let thumbnail = reqwest::get(thumbnail_set).await?.bytes().await?;
 
     let put = client.put_object()
         .key(format!("{}.jpg", detail.clone().twitch_user_login))
-        .bucket(env.bucket_name)
+        .bucket(env.bucket_name.clone())
         .body(ByteStream::from(thumbnail))
         .send()
         .await;
