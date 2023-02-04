@@ -1,0 +1,13 @@
+{
+    "version": "0",
+    "id": "fe8d3c65-xmpl-c5c3-2c87-81584709a377",
+    "detail-type": "stream.online",
+    "source": "hbjy.twitch.eventsub",
+    "account": "123456789012",
+    "time": "2020-04-28T07:20:20Z",
+    "region": "us-east-2",
+    "resources": [],
+    "detail": {
+        "twitch_user_login": "hayden_dev"
+    }
+}
