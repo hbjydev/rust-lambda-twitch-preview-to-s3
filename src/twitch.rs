@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::{Serialize, Deserialize};
 use reqwest::{Client, Error};
 
@@ -46,8 +48,6 @@ pub struct TwitchClient {
 #[derive(Deserialize)]
 struct TwitchIdOauth2Token {
     access_token: String,
-    token_type: String,
-    expires_in: u16,
 }
 
 impl TwitchClient {
@@ -58,19 +58,21 @@ impl TwitchClient {
     async fn get_auth_token(&self) -> Result<TwitchIdOauth2Token, Error> {
         let client = Client::new();
 
+        let mut params = HashMap::new();
+
+        params.insert("client_id", self.config.client_id.clone());
+        params.insert("client_secret", self.config.client_secret.clone());
+        params.insert("grant_type", String::from("client_credentials"));
+
         let token = client.post("https://id.twitch.tv/oauth2/token")
-            .body(
-                format!(
-                    "client_id={}&client_secret={}&grant_type=client_credentials",
-                    self.config.client_id,
-                    self.config.client_secret,
-                )
-            )
-            .header("Content-Type", "x-www-form-urlencoded");
+            .form(&params)
+            .header("Content-Type", "x-www-form-urlencoded")
+            .send()
+            .await?
+            .json::<TwitchIdOauth2Token>()
+            .await?;
 
-        let token_res = token.send().await?.json::<TwitchIdOauth2Token>().await?;
-
-        Ok(token_res)
+        Ok(token)
     }
 
     pub async fn get_streams(&self, login: &str) -> Result<TwitchStreams, Error> {
